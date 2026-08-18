@@ -23,6 +23,7 @@
 #include "opentelemetry/sdk/trace/recordable.h"
 #include "opentelemetry/sdk/trace/span_data.h"
 #include "opentelemetry/version.h"
+#include "../../src/trace/batch_span_processor_queue.h"
 
 #if defined(_MSC_VER)
 #  include "opentelemetry/sdk/common/env_variables.h"
@@ -127,6 +128,64 @@ public:
 };
 
 /* ##################################   TESTS   ############################################ */
+
+TEST(BatchSpanProcessorQueue, TestCircularBufferOwnershipOnFull)
+{
+  sdk::trace::CircularBufferSpanQueue queue(1);
+
+  std::unique_ptr<sdk::trace::Recordable> accepted(new sdk::trace::SpanData);
+  sdk::trace::Recordable *accepted_ptr = accepted.get();
+  EXPECT_TRUE(queue.TryEnqueue(accepted));
+  EXPECT_EQ(nullptr, accepted);
+  EXPECT_EQ(1, queue.Size());
+  EXPECT_FALSE(queue.Empty());
+
+  std::unique_ptr<sdk::trace::Recordable> rejected(new sdk::trace::SpanData);
+  sdk::trace::Recordable *rejected_ptr = rejected.get();
+  EXPECT_FALSE(queue.TryEnqueue(rejected));
+  EXPECT_EQ(rejected_ptr, rejected.get());
+  EXPECT_EQ(1, queue.Size());
+
+  std::vector<std::unique_ptr<sdk::trace::Recordable>> consumed;
+  auto consume = [&](std::unique_ptr<sdk::trace::Recordable> &&recordable) noexcept {
+    consumed.push_back(std::move(recordable));
+  };
+  EXPECT_EQ(1, queue.TryDequeueBatch(1, consume));
+  ASSERT_EQ(1, consumed.size());
+  EXPECT_EQ(accepted_ptr, consumed[0].get());
+  EXPECT_TRUE(queue.Empty());
+}
+
+TEST(BatchSpanProcessorQueue, TestCircularBufferBatchLimitAndFifo)
+{
+  sdk::trace::CircularBufferSpanQueue queue(3);
+  std::vector<sdk::trace::Recordable *> enqueued;
+
+  for (size_t i = 0; i < 3; ++i)
+  {
+    std::unique_ptr<sdk::trace::Recordable> recordable(new sdk::trace::SpanData);
+    enqueued.push_back(recordable.get());
+    ASSERT_TRUE(queue.TryEnqueue(recordable));
+    ASSERT_EQ(nullptr, recordable);
+  }
+
+  std::vector<std::unique_ptr<sdk::trace::Recordable>> consumed;
+  auto consume = [&](std::unique_ptr<sdk::trace::Recordable> &&recordable) noexcept {
+    consumed.push_back(std::move(recordable));
+  };
+
+  EXPECT_EQ(2, queue.TryDequeueBatch(2, consume));
+  ASSERT_EQ(2, consumed.size());
+  EXPECT_EQ(enqueued[0], consumed[0].get());
+  EXPECT_EQ(enqueued[1], consumed[1].get());
+  EXPECT_EQ(1, queue.Size());
+
+  EXPECT_EQ(1, queue.TryDequeueBatch(10, consume));
+  ASSERT_EQ(3, consumed.size());
+  EXPECT_EQ(enqueued[2], consumed[2].get());
+  EXPECT_EQ(0, queue.TryDequeueBatch(1, consume));
+  EXPECT_TRUE(queue.Empty());
+}
 
 TEST_F(BatchSpanProcessorTestPeer, TestShutdown)
 {

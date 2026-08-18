@@ -14,9 +14,6 @@
 
 #include "opentelemetry/common/timestamp.h"
 #include "opentelemetry/nostd/span.h"
-#include "opentelemetry/sdk/common/atomic_unique_ptr.h"
-#include "opentelemetry/sdk/common/circular_buffer.h"
-#include "opentelemetry/sdk/common/circular_buffer_range.h"
 #include "opentelemetry/sdk/common/global_log_handler.h"
 #include "opentelemetry/sdk/trace/batch_span_processor.h"
 #include "opentelemetry/sdk/trace/batch_span_processor_options.h"
@@ -24,13 +21,12 @@
 #include "opentelemetry/sdk/trace/exporter.h"
 #include "opentelemetry/sdk/trace/recordable.h"
 #include "opentelemetry/version.h"
+#include "src/trace/batch_span_processor_queue.h"
 
 #ifdef ENABLE_THREAD_INSTRUMENTATION_PREVIEW
 #  include "opentelemetry/sdk/common/thread_instrumentation.h"
 #endif /* ENABLE_THREAD_INSTRUMENTATION_PREVIEW */
 
-using opentelemetry::sdk::common::AtomicUniquePtr;
-using opentelemetry::sdk::common::CircularBufferRange;
 using opentelemetry::trace::SpanContext;
 
 OPENTELEMETRY_BEGIN_NAMESPACE
@@ -45,7 +41,7 @@ BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      buffer_(max_queue_size_),
+      queue_(new CircularBufferSpanQueue(max_queue_size_)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(nullptr),
       worker_thread_()
@@ -61,7 +57,7 @@ BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      buffer_(max_queue_size_),
+      queue_(new CircularBufferSpanQueue(max_queue_size_)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(runtime_options.thread_instrumentation),
       worker_thread_()
@@ -87,7 +83,7 @@ void BatchSpanProcessor::OnEnd(std::unique_ptr<Recordable> &&span) noexcept
     return;
   }
 
-  if (buffer_.Add(std::move(span)) == false)
+  if (queue_->TryEnqueue(span) == false)
   {
     OTEL_INTERNAL_LOG_WARN("BatchSpanProcessor queue is full - dropping span.");
     return;
@@ -95,7 +91,7 @@ void BatchSpanProcessor::OnEnd(std::unique_ptr<Recordable> &&span) noexcept
 
   // If the queue gets at least half full a preemptive notification is
   // sent to the worker thread to start a new export cycle.
-  size_t buffer_size = buffer_.size();
+  size_t buffer_size = queue_->Size();
   if (buffer_size >= max_queue_size_ / 2 || buffer_size >= max_export_batch_size_)
   {
     // signal the worker thread
@@ -196,7 +192,7 @@ void BatchSpanProcessor::DoBackgroundWork()
         return true;
       }
 
-      return !buffer_.empty();
+      return !queue_->Empty();
     });
     synchronization_data_->is_force_wakeup_background_worker.store(false,
                                                                    std::memory_order_release);
@@ -248,12 +244,12 @@ void BatchSpanProcessor::Export()
         synchronization_data_->force_flush_pending_sequence.load(std::memory_order_acquire);
     if (notify_force_flush)
     {
-      num_records_to_export = buffer_.size();
+      num_records_to_export = queue_->Size();
     }
     else
     {
       num_records_to_export =
-          buffer_.size() >= max_export_batch_size_ ? max_export_batch_size_ : buffer_.size();
+          queue_->Size() >= max_export_batch_size_ ? max_export_batch_size_ : queue_->Size();
     }
 
     if (num_records_to_export == 0)
@@ -265,15 +261,10 @@ void BatchSpanProcessor::Export()
     // Reserve space for the number of records
     spans_arr.reserve(num_records_to_export);
 
-    buffer_.Consume(num_records_to_export,
-                    [&](CircularBufferRange<AtomicUniquePtr<Recordable>> range) noexcept {
-                      range.ForEach([&](AtomicUniquePtr<Recordable> &ptr) {
-                        std::unique_ptr<Recordable> swap_ptr = std::unique_ptr<Recordable>(nullptr);
-                        ptr.Swap(swap_ptr);
-                        spans_arr.push_back(std::unique_ptr<Recordable>(swap_ptr.release()));
-                        return true;
-                      });
-                    });
+    queue_->TryDequeueBatch(
+        num_records_to_export, [&](std::unique_ptr<Recordable> &&recordable) noexcept {
+          spans_arr.push_back(std::move(recordable));
+        });
 
     exporter_->Export(nostd::span<std::unique_ptr<Recordable>>(spans_arr.data(), spans_arr.size()));
     NotifyCompletion(notify_force_flush, exporter_, synchronization_data_);
@@ -324,7 +315,7 @@ void BatchSpanProcessor::DrainQueue()
 {
   while (true)
   {
-    if (buffer_.empty() &&
+    if (queue_->Empty() &&
         synchronization_data_->force_flush_pending_sequence.load(std::memory_order_acquire) <=
             synchronization_data_->force_flush_notified_sequence.load(std::memory_order_acquire))
     {

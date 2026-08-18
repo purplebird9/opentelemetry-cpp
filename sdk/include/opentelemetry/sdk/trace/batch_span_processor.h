@@ -12,7 +12,6 @@
 #include <mutex>
 #include <thread>
 
-#include "opentelemetry/sdk/common/circular_buffer.h"
 #include "opentelemetry/sdk/trace/batch_span_processor_options.h"
 #include "opentelemetry/sdk/trace/batch_span_processor_runtime_options.h"
 #include "opentelemetry/sdk/trace/exporter.h"
@@ -26,6 +25,8 @@ namespace sdk
 {
 namespace trace
 {
+
+class BatchSpanProcessorQueue;
 
 /**
  * This is an implementation of the SpanProcessor which creates batches of finished spans and passes
@@ -183,8 +184,8 @@ protected:
   const std::chrono::milliseconds schedule_delay_millis_;
   const size_t max_export_batch_size_;
 
-  /* The buffer/queue to which the ended spans are added */
-  opentelemetry::sdk::common::CircularBuffer<Recordable> buffer_;
+  /* The queue to which the ended spans are added */
+  std::unique_ptr<BatchSpanProcessorQueue> queue_;
 
   std::shared_ptr<SynchronizationData> synchronization_data_;
 
