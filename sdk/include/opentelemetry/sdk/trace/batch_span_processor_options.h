@@ -15,6 +15,13 @@ namespace sdk
 namespace trace
 {
 
+/** Queue implementation used by BatchSpanProcessor. */
+enum class BatchSpanProcessorQueueBackend
+{
+  kCircularBuffer,
+  kRingOs,
+};
+
 namespace batch_span_processor_options_env
 {
 
@@ -86,6 +93,17 @@ struct OPENTELEMETRY_EXPORT BatchSpanProcessorOptions
    * equal to max_queue_size.
    */
   size_t max_export_batch_size = batch_span_processor_options_env::GetMaxExportBatchSizeFromEnv();
+
+  /** Queue implementation. CircularBuffer preserves the upstream default behavior. */
+  BatchSpanProcessorQueueBackend queue_backend =
+      BatchSpanProcessorQueueBackend::kCircularBuffer;
+
+  /**
+   * Number of application threads that may concurrently call OnEnd when the RingOS backend is
+   * selected. Each such thread permanently claims one RingOS writer slot for this processor.
+   * A value of zero is invalid for the RingOS backend.
+   */
+  size_t ring_os_producer_count = 0;
 };
 
 }  // namespace trace

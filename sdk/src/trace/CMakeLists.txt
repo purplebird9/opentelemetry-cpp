@@ -33,6 +33,28 @@ add_library(
   random_id_generator_factory.cc
   tracer_config.cc)
 
+option(OPENTELEMETRY_WITH_RINGOS
+       "Build the BatchSpanProcessor RingOS queue backend" OFF)
+
+if(OPENTELEMETRY_WITH_RINGOS)
+  find_path(OMNISTACK_MPSC_INCLUDE_DIR omnistack/mpsc/queue.h REQUIRED)
+  find_library(OMNISTACK_MPSC_LIBRARY NAMES omnistack_mpsc REQUIRED)
+  target_sources(opentelemetry_trace PRIVATE ring_os_span_queue.cc)
+  target_include_directories(opentelemetry_trace PRIVATE
+                             ${OMNISTACK_MPSC_INCLUDE_DIR})
+  target_compile_definitions(opentelemetry_trace PRIVATE
+                             OPENTELEMETRY_WITH_RINGOS=1)
+  target_link_libraries(opentelemetry_trace PRIVATE
+                        ${OMNISTACK_MPSC_LIBRARY})
+  if(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(opentelemetry_trace PRIVATE Threads::Threads)
+    if(NOT APPLE)
+      target_link_libraries(opentelemetry_trace PRIVATE rt)
+    endif()
+  endif()
+endif()
+
 set_target_properties(opentelemetry_trace PROPERTIES EXPORT_NAME trace)
 set_target_version(opentelemetry_trace)
 

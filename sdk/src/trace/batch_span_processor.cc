@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -23,6 +24,10 @@
 #include "opentelemetry/version.h"
 #include "src/trace/batch_span_processor_queue.h"
 
+#ifdef OPENTELEMETRY_WITH_RINGOS
+#  include "src/trace/ring_os_span_queue.h"
+#endif
+
 #ifdef ENABLE_THREAD_INSTRUMENTATION_PREVIEW
 #  include "opentelemetry/sdk/common/thread_instrumentation.h"
 #endif /* ENABLE_THREAD_INSTRUMENTATION_PREVIEW */
@@ -35,13 +40,37 @@ namespace sdk
 namespace trace
 {
 
+namespace
+{
+
+std::unique_ptr<BatchSpanProcessorQueue> CreateBatchSpanProcessorQueue(
+    const BatchSpanProcessorOptions &options)
+{
+  switch (options.queue_backend)
+  {
+    case BatchSpanProcessorQueueBackend::kCircularBuffer:
+      return std::unique_ptr<BatchSpanProcessorQueue>(
+          new CircularBufferSpanQueue(options.max_queue_size));
+    case BatchSpanProcessorQueueBackend::kRingOs:
+#ifdef OPENTELEMETRY_WITH_RINGOS
+      return CreateRingOsSpanQueue(options.max_queue_size, options.ring_os_producer_count);
+#else
+      throw std::invalid_argument(
+          "RingOS BatchSpanProcessor backend was not enabled when OpenTelemetry was built");
+#endif
+  }
+  throw std::invalid_argument("unknown BatchSpanProcessor queue backend");
+}
+
+}  // namespace
+
 BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
                                        const BatchSpanProcessorOptions &options)
     : exporter_(std::move(exporter)),
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      queue_(new CircularBufferSpanQueue(max_queue_size_)),
+      queue_(CreateBatchSpanProcessorQueue(options)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(nullptr),
       worker_thread_()
@@ -57,7 +86,7 @@ BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      queue_(new CircularBufferSpanQueue(max_queue_size_)),
+      queue_(CreateBatchSpanProcessorQueue(options)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(runtime_options.thread_instrumentation),
       worker_thread_()
