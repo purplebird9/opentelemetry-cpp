@@ -30,6 +30,22 @@ foreach(
     TEST_LIST ${testname})
 endforeach()
 
+if(OPENTELEMETRY_WITH_RINGOS)
+  add_executable(batch_span_processor_ring_os_test
+                 batch_span_processor_ring_os_test.cc)
+  target_link_libraries(
+    batch_span_processor_ring_os_test
+    ${GTEST_BOTH_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+    opentelemetry_common
+    opentelemetry_trace
+    opentelemetry_resources)
+  gtest_add_tests(
+    TARGET batch_span_processor_ring_os_test
+    TEST_PREFIX trace.
+    TEST_LIST batch_span_processor_ring_os_test)
+endif()
+
 if(WITH_BENCHMARK)
   add_executable(sampler_benchmark sampler_benchmark.cc)
   target_link_libraries(

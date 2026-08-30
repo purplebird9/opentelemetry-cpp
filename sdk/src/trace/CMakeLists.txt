@@ -40,6 +40,8 @@ if(OPENTELEMETRY_WITH_RINGOS)
   find_path(OMNISTACK_MPSC_INCLUDE_DIR omnistack/mpsc/queue.h REQUIRED)
   find_library(OMNISTACK_MPSC_LIBRARY NAMES omnistack_mpsc REQUIRED)
   target_sources(opentelemetry_trace PRIVATE ring_os_span_queue.cc)
+  # The RingOS C++ adapter exposes std::optional in its public headers.
+  target_compile_features(opentelemetry_trace PRIVATE cxx_std_17)
   target_include_directories(opentelemetry_trace PRIVATE
                              ${OMNISTACK_MPSC_INCLUDE_DIR})
   target_compile_definitions(opentelemetry_trace PRIVATE
