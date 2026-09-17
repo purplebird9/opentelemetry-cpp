@@ -129,6 +129,15 @@ void BatchSpanProcessor::OnEnd(std::unique_ptr<Recordable> &&span) noexcept
   }
 }
 
+size_t BatchSpanProcessor::OnEndBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept
+{
+  if (synchronization_data_->is_shutdown.load()) return 0;
+  const size_t accepted = queue_->TryEnqueueBatch(records, count);
+  if (queue_->Size() >= max_export_batch_size_ || queue_->Size() >= max_queue_size_ / 2)
+    synchronization_data_->cv.notify_all();
+  return accepted;
+}
+
 bool BatchSpanProcessor::ForceFlush(std::chrono::microseconds timeout) noexcept
 {
   if (synchronization_data_->is_shutdown.load() == true)

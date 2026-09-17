@@ -50,6 +50,12 @@ public:
    * @return true if the recordable was enqueued, false otherwise.
    */
   virtual bool TryEnqueue(std::unique_ptr<Recordable> &recordable) noexcept = 0;
+  virtual size_t TryEnqueueBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept
+  {
+    size_t accepted = 0;
+    while (accepted < count && TryEnqueue(records[accepted])) ++accepted;
+    return accepted;
+  }
 
   /**
    * Returns a snapshot of the number of recordables currently queued.

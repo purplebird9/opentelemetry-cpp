@@ -86,6 +86,8 @@ public:
    * @param span - A recordable for a span that just ended
    */
   void OnEnd(std::unique_ptr<Recordable> &&span) noexcept override;
+  // Accepted records become null; the caller retains rejected records.
+  size_t OnEndBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept;
 
   /**
    * Export all ended spans that have not been exported yet.
