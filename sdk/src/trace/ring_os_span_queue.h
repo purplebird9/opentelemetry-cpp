@@ -31,7 +31,7 @@ struct RingOsSpanQueueStats
 class RingOsSpanQueue final : public BatchSpanProcessorQueue
 {
 public:
-  RingOsSpanQueue(size_t requested_capacity, size_t producer_count);
+  RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size = 64);
 
   bool TryEnqueue(std::unique_ptr<Recordable> &recordable) noexcept override;
   size_t Size() const noexcept override;
@@ -59,7 +59,8 @@ private:
 };
 
 std::unique_ptr<BatchSpanProcessorQueue> CreateRingOsSpanQueue(size_t requested_capacity,
-                                                               size_t producer_count);
+                                                               size_t producer_count,
+                                                               uint32_t batch_size = 64);
 
 }  // namespace trace
 }  // namespace sdk

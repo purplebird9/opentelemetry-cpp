@@ -29,7 +29,7 @@ struct ThreadProducerAssignment
 thread_local std::vector<ThreadProducerAssignment> g_thread_producer_assignments;
 
 omnistack::mpsc::QueueOptions MakeQueueOptions(size_t requested_capacity,
-                                               size_t producer_count)
+                                               size_t producer_count, uint32_t batch_size)
 {
   if (producer_count == 0 ||
       producer_count > static_cast<size_t>((std::numeric_limits<int>::max)()))
@@ -40,15 +40,15 @@ omnistack::mpsc::QueueOptions MakeQueueOptions(size_t requested_capacity,
   omnistack::mpsc::QueueOptions options;
   options.producer_count           = static_cast<uint32_t>(producer_count);
   options.requested_total_capacity = requested_capacity;
-  options.batch_size               = 1;
+  options.batch_size               = batch_size;
   options.enable_statistics        = false;
   return options;
 }
 
 }  // namespace
 
-RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_count)
-    : queue_(MakeQueueOptions(requested_capacity, producer_count)),
+RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size)
+    : queue_(MakeQueueOptions(requested_capacity, producer_count, batch_size)),
       producers_(),
       consumer_([this]() {
         auto consumer = queue_.tryRegisterConsumer();
@@ -190,10 +190,10 @@ RingOsSpanQueueStats RingOsSpanQueue::GetStats() const noexcept
 }
 
 std::unique_ptr<BatchSpanProcessorQueue> CreateRingOsSpanQueue(size_t requested_capacity,
-                                                               size_t producer_count)
+                                                               size_t producer_count, uint32_t batch_size)
 {
   return std::unique_ptr<BatchSpanProcessorQueue>(
-      new RingOsSpanQueue(requested_capacity, producer_count));
+      new RingOsSpanQueue(requested_capacity, producer_count, batch_size));
 }
 
 }  // namespace trace

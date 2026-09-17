@@ -53,7 +53,8 @@ std::unique_ptr<BatchSpanProcessorQueue> CreateBatchSpanProcessorQueue(
           new CircularBufferSpanQueue(options.max_queue_size));
     case BatchSpanProcessorQueueBackend::kRingOs:
 #ifdef OPENTELEMETRY_WITH_RINGOS
-      return CreateRingOsSpanQueue(options.max_queue_size, options.ring_os_producer_count);
+      return CreateRingOsSpanQueue(options.max_queue_size, options.ring_os_producer_count,
+                                   options.ring_os_batch_size);
 #else
       throw std::invalid_argument(
           "RingOS BatchSpanProcessor backend was not enabled when OpenTelemetry was built");

@@ -104,6 +104,8 @@ struct OPENTELEMETRY_EXPORT BatchSpanProcessorOptions
    * A value of zero is invalid for the RingOS backend.
    */
   size_t ring_os_producer_count = 0;
+  /** RingOS leaf publication batch size. */
+  uint32_t ring_os_batch_size = 64;
 };
 
 }  // namespace trace
