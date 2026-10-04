@@ -44,7 +44,8 @@ namespace
 {
 
 std::unique_ptr<BatchSpanProcessorQueue> CreateBatchSpanProcessorQueue(
-    const BatchSpanProcessorOptions &options)
+    const BatchSpanProcessorOptions &options,
+    const std::shared_ptr<sdk::common::ThreadInstrumentation> &ring_os_reader_instrumentation)
 {
   switch (options.queue_backend)
   {
@@ -54,7 +55,7 @@ std::unique_ptr<BatchSpanProcessorQueue> CreateBatchSpanProcessorQueue(
     case BatchSpanProcessorQueueBackend::kRingOs:
 #ifdef OPENTELEMETRY_WITH_RINGOS
       return CreateRingOsSpanQueue(options.max_queue_size, options.ring_os_producer_count,
-                                   options.ring_os_batch_size);
+                                   options.ring_os_batch_size, ring_os_reader_instrumentation);
 #else
       throw std::invalid_argument(
           "RingOS BatchSpanProcessor backend was not enabled when OpenTelemetry was built");
@@ -71,7 +72,7 @@ BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      queue_(CreateBatchSpanProcessorQueue(options)),
+      queue_(CreateBatchSpanProcessorQueue(options, nullptr)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(nullptr),
       worker_thread_()
@@ -87,7 +88,8 @@ BatchSpanProcessor::BatchSpanProcessor(std::unique_ptr<SpanExporter> &&exporter,
       max_queue_size_(options.max_queue_size),
       schedule_delay_millis_(options.schedule_delay_millis),
       max_export_batch_size_(options.max_export_batch_size),
-      queue_(CreateBatchSpanProcessorQueue(options)),
+      queue_(CreateBatchSpanProcessorQueue(options,
+                                           runtime_options.ring_os_reader_instrumentation)),
       synchronization_data_(std::make_shared<SynchronizationData>()),
       worker_thread_instrumentation_(runtime_options.thread_instrumentation),
       worker_thread_()

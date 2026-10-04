@@ -47,7 +47,11 @@ omnistack::mpsc::QueueOptions MakeQueueOptions(size_t requested_capacity,
 
 }  // namespace
 
-RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size)
+RingOsSpanQueue::RingOsSpanQueue(
+    size_t requested_capacity,
+    size_t producer_count,
+    uint32_t batch_size,
+    std::shared_ptr<sdk::common::ThreadInstrumentation> reader_instrumentation)
     : queue_(MakeQueueOptions(requested_capacity, producer_count, batch_size)),
       producers_(),
       producer_mutexes_(new std::mutex[producer_count]),
@@ -59,6 +63,9 @@ RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_coun
         }
         return std::move(*consumer);
       }()),
+      handoff_capacity_(requested_capacity + 1),
+      handoff_(new Recordable *[handoff_capacity_]{}),
+      reader_instrumentation_(std::move(reader_instrumentation)),
       instance_id_(g_next_ring_os_queue_id.fetch_add(1, std::memory_order_relaxed))
 {
   producers_.reserve(producer_count);
@@ -82,6 +89,7 @@ RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_coun
       }
     }
   });
+  reader_thread_ = std::thread(&RingOsSpanQueue::ReaderLoop, this);
 }
 
 RingOsSpanQueue::~RingOsSpanQueue()
@@ -89,6 +97,44 @@ RingOsSpanQueue::~RingOsSpanQueue()
   { std::lock_guard<std::mutex> lock(timer_mutex_); timer_stop_ = true; }
   timer_cv_.notify_all();
   if (timer_.joinable()) timer_.join();
+  reader_stop_.store(true, std::memory_order_release);
+  if (reader_thread_.joinable()) reader_thread_.join();
+}
+
+void RingOsSpanQueue::ReaderLoop() noexcept
+{
+#ifdef ENABLE_THREAD_INSTRUMENTATION_PREVIEW
+  if (reader_instrumentation_) reader_instrumentation_->OnStart();
+#endif
+  std::array<void *, 256> payloads;
+  while (!reader_stop_.load(std::memory_order_acquire))
+  {
+    const size_t head = handoff_head_.load(std::memory_order_relaxed);
+    const size_t tail = handoff_tail_.load(std::memory_order_acquire);
+    const size_t free = tail > head ? tail - head - 1 : handoff_capacity_ - head + tail - 1;
+    if (free == 0)
+    {
+      std::this_thread::yield();
+      continue;
+    }
+    const size_t received = consumer_.tryGetBatch(
+        payloads.data(), (std::min)(free, payloads.size()));
+    if (received == 0)
+    {
+      std::this_thread::yield();
+      continue;
+    }
+    size_t next = head;
+    for (size_t i = 0; i < received; ++i)
+    {
+      handoff_[next] = static_cast<Recordable *>(payloads[i]);
+      next = next + 1 == handoff_capacity_ ? 0 : next + 1;
+    }
+    handoff_head_.store(next, std::memory_order_release);
+  }
+#ifdef ENABLE_THREAD_INSTRUMENTATION_PREVIEW
+  if (reader_instrumentation_) reader_instrumentation_->OnEnd();
+#endif
 }
 
 size_t RingOsSpanQueue::TryEnqueueBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept
@@ -187,33 +233,24 @@ bool RingOsSpanQueue::Empty() const noexcept
 size_t RingOsSpanQueue::TryDequeueBatch(size_t max_count,
                                         ConsumeBatchCallback callback) noexcept
 {
-  constexpr size_t kScratchSize = 256;
-  std::array<void *, kScratchSize> payloads;
-  size_t total = 0;
-
-  while (total < max_count)
+  size_t tail = handoff_tail_.load(std::memory_order_relaxed);
+  const size_t head = handoff_head_.load(std::memory_order_acquire);
+  const size_t available = head >= tail ? head - tail : handoff_capacity_ - tail + head;
+  const size_t received = (std::min)(max_count, available);
+  for (size_t i = 0; i < received; ++i)
   {
-    const size_t requested = (std::min)(max_count - total, payloads.size());
-    const size_t received  = consumer_.tryGetBatch(payloads.data(), requested);
-    if (received == 0)
-    {
-      break;
-    }
-
+    Recordable *recordable = handoff_[tail];
+    handoff_[tail] = nullptr;
+    tail = tail + 1 == handoff_capacity_ ? 0 : tail + 1;
+    callback(std::unique_ptr<Recordable>(recordable));
+  }
+  if (received > 0)
+  {
+    handoff_tail_.store(tail, std::memory_order_release);
     queued_.fetch_sub(received, std::memory_order_release);
     exported_.fetch_add(received, std::memory_order_relaxed);
-    total += received;
-    for (size_t i = 0; i < received; ++i)
-    {
-      callback(std::unique_ptr<Recordable>(static_cast<Recordable *>(payloads[i])));
-    }
-
-    if (received < requested)
-    {
-      break;
-    }
   }
-  return total;
+  return received;
 }
 
 size_t RingOsSpanQueue::RequestedCapacity() const noexcept
@@ -236,10 +273,14 @@ RingOsSpanQueueStats RingOsSpanQueue::GetStats() const noexcept
 }
 
 std::unique_ptr<BatchSpanProcessorQueue> CreateRingOsSpanQueue(size_t requested_capacity,
-                                                               size_t producer_count, uint32_t batch_size)
+                                                               size_t producer_count,
+                                                               uint32_t batch_size,
+                                                               std::shared_ptr<sdk::common::ThreadInstrumentation>
+                                                                   reader_instrumentation)
 {
   return std::unique_ptr<BatchSpanProcessorQueue>(
-      new RingOsSpanQueue(requested_capacity, producer_count, batch_size));
+      new RingOsSpanQueue(requested_capacity, producer_count, batch_size,
+                          std::move(reader_instrumentation)));
 }
 
 }  // namespace trace
