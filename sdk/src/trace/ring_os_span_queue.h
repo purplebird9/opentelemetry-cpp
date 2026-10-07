@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "omnistack/mpsc/queue.h"
-#include "opentelemetry/sdk/common/thread_instrumentation.h"
 #include "src/trace/batch_span_processor_queue.h"
 
 OPENTELEMETRY_BEGIN_NAMESPACE
@@ -35,11 +34,7 @@ struct RingOsSpanQueueStats
 class RingOsSpanQueue final : public BatchSpanProcessorQueue
 {
 public:
-  RingOsSpanQueue(
-      size_t requested_capacity,
-      size_t producer_count,
-      uint32_t batch_size = 64,
-      std::shared_ptr<sdk::common::ThreadInstrumentation> reader_instrumentation = nullptr);
+  RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size = 64);
   ~RingOsSpanQueue() override;
   size_t TryEnqueueBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept override;
 
@@ -54,7 +49,6 @@ public:
 
 private:
   omnistack::mpsc::Producer *GetProducerForCurrentThread() noexcept;
-  void ReaderLoop() noexcept;
 
   // Handles are destroyed before queue_, which owns their shared state.
   omnistack::mpsc::Queue queue_;
@@ -65,13 +59,6 @@ private:
   bool timer_stop_ = false;
   std::thread timer_;
   omnistack::mpsc::Consumer consumer_;
-  const size_t handoff_capacity_;
-  std::unique_ptr<Recordable *[]> handoff_;
-  std::atomic<size_t> handoff_head_{0};
-  std::atomic<size_t> handoff_tail_{0};
-  std::shared_ptr<sdk::common::ThreadInstrumentation> reader_instrumentation_;
-  std::atomic<bool> reader_stop_{false};
-  std::thread reader_thread_;
   const uint64_t instance_id_;
   std::atomic<size_t> next_producer_slot_{0};
   std::atomic<size_t> queued_{0};
@@ -83,9 +70,7 @@ private:
 
 std::unique_ptr<BatchSpanProcessorQueue> CreateRingOsSpanQueue(size_t requested_capacity,
                                                                size_t producer_count,
-                                                               uint32_t batch_size = 64,
-                                                               std::shared_ptr<sdk::common::ThreadInstrumentation>
-                                                                   reader_instrumentation = nullptr);
+                                                               uint32_t batch_size = 64);
 
 }  // namespace trace
 }  // namespace sdk

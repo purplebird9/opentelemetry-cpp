@@ -22,8 +22,6 @@ struct BatchSpanProcessorRuntimeOptions
 {
   std::shared_ptr<sdk::common::ThreadInstrumentation> thread_instrumentation =
       std::shared_ptr<sdk::common::ThreadInstrumentation>(nullptr);
-  std::shared_ptr<sdk::common::ThreadInstrumentation> ring_os_reader_instrumentation =
-      std::shared_ptr<sdk::common::ThreadInstrumentation>(nullptr);
 };
 
 }  // namespace trace
