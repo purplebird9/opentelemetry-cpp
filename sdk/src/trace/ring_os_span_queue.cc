@@ -50,7 +50,6 @@ omnistack::mpsc::QueueOptions MakeQueueOptions(size_t requested_capacity,
 RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size)
     : queue_(MakeQueueOptions(requested_capacity, producer_count, batch_size)),
       producers_(),
-      producer_mutexes_(new std::mutex[producer_count]),
       consumer_([this]() {
         auto consumer = queue_.tryRegisterConsumer();
         if (!consumer)
@@ -59,7 +58,8 @@ RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_coun
         }
         return std::move(*consumer);
       }()),
-      instance_id_(g_next_ring_os_queue_id.fetch_add(1, std::memory_order_relaxed))
+      instance_id_(g_next_ring_os_queue_id.fetch_add(1, std::memory_order_relaxed)),
+      needs_flush_(batch_size != 1)
 {
   producers_.reserve(producer_count);
   for (size_t slot = 0; slot < producer_count; ++slot)
@@ -71,38 +71,19 @@ RingOsSpanQueue::RingOsSpanQueue(size_t requested_capacity, size_t producer_coun
     }
     producers_.push_back(std::move(*producer));
   }
-  timer_ = std::thread([this] {
-    std::unique_lock<std::mutex> timer_lock(timer_mutex_);
-    while (!timer_cv_.wait_for(timer_lock, std::chrono::milliseconds(1), [this] { return timer_stop_; }))
-    {
-      for (size_t i = 0; i < producers_.size(); ++i)
-      {
-        std::lock_guard<std::mutex> lock(producer_mutexes_[i]);
-        producers_[i].flush();
-      }
-    }
-  });
-}
-
-RingOsSpanQueue::~RingOsSpanQueue()
-{
-  { std::lock_guard<std::mutex> lock(timer_mutex_); timer_stop_ = true; }
-  timer_cv_.notify_all();
-  if (timer_.joinable()) timer_.join();
 }
 
 size_t RingOsSpanQueue::TryEnqueueBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept
 {
   auto *producer = GetProducerForCurrentThread();
   if (!producer) return 0;
-  std::lock_guard<std::mutex> lock(producer_mutexes_[producer->id()]);
+  for (size_t i = 0; i < count; ++i)
+    if (!records[i]) return 0;
   std::array<void *, 256> payloads;
   size_t total = 0;
   while (total < count)
   {
     const size_t requested = (std::min)(payloads.size(), count - total);
-    for (size_t i = 0; i < requested; ++i)
-      if (!records[total + i]) return total;
     for (size_t i = 0; i < requested; ++i) payloads[i] = records[total + i].release();
     queued_.fetch_add(requested, std::memory_order_relaxed);
     const auto result = producer->tryPutBatch(payloads.data(), requested);
@@ -113,6 +94,7 @@ size_t RingOsSpanQueue::TryEnqueueBatch(std::unique_ptr<Recordable> *records, si
     total += result.accepted;
     if (result.accepted < requested) break;
   }
+  if (needs_flush_) producer->flush();
   dropped_full_.fetch_add(count - total, std::memory_order_relaxed);
   return total;
 }
@@ -160,7 +142,6 @@ bool RingOsSpanQueue::TryEnqueue(std::unique_ptr<Recordable> &recordable) noexce
   }
 
   // Reserve the accounting slot before publishing so the consumer cannot underflow queued_.
-  std::lock_guard<std::mutex> lock(producer_mutexes_[producer->id()]);
   queued_.fetch_add(1, std::memory_order_relaxed);
   Recordable *raw_recordable = recordable.release();
   if (producer->tryPut(raw_recordable) != omnistack::mpsc::PutStatus::accepted)
@@ -170,6 +151,7 @@ bool RingOsSpanQueue::TryEnqueue(std::unique_ptr<Recordable> &recordable) noexce
     dropped_full_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
+  if (needs_flush_) producer->flush();
   accepted_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }

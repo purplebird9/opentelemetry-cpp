@@ -64,9 +64,10 @@ private:
   std::shared_ptr<CountingExporterState> state_;
 };
 
-void RunRingOsBatchSpanProcessorSmoke(size_t producer_count)
+void RunRingOsBatchSpanProcessorSmoke(size_t producer_count,
+                                      size_t spans_per_producer = 64,
+                                      uint32_t ring_batch_size = 64)
 {
-  constexpr size_t kSpansPerProducer = 64;
   constexpr size_t kMaxQueueSize     = 65536;
   constexpr auto kTimeout            = std::chrono::seconds(10);
 
@@ -78,6 +79,7 @@ void RunRingOsBatchSpanProcessorSmoke(size_t producer_count)
   options.schedule_delay_millis  = std::chrono::milliseconds(100);
   options.queue_backend          = sdk::trace::BatchSpanProcessorQueueBackend::kRingOs;
   options.ring_os_producer_count = producer_count;
+  options.ring_os_batch_size     = ring_batch_size;
 
   auto processor = std::make_shared<sdk::trace::BatchSpanProcessor>(
       std::unique_ptr<sdk::trace::SpanExporter>(new CountingSpanExporter(exporter_state)), options);
@@ -86,8 +88,8 @@ void RunRingOsBatchSpanProcessorSmoke(size_t producer_count)
   producers.reserve(producer_count);
   for (size_t producer = 0; producer < producer_count; ++producer)
   {
-    producers.emplace_back([processor]() {
-      for (size_t span_index = 0; span_index < kSpansPerProducer; ++span_index)
+    producers.emplace_back([processor, spans_per_producer]() {
+      for (size_t span_index = 0; span_index < spans_per_producer; ++span_index)
       {
         processor->OnEnd(processor->MakeRecordable());
       }
@@ -104,7 +106,7 @@ void RunRingOsBatchSpanProcessorSmoke(size_t producer_count)
   ASSERT_TRUE(processor->Shutdown(kTimeout));
   EXPECT_TRUE(exporter_state->is_shutdown.load(std::memory_order_acquire));
 
-  const size_t ended = producer_count * kSpansPerProducer;
+  const size_t ended = producer_count * spans_per_producer;
   EXPECT_EQ(ended, exporter_state->exported.load(std::memory_order_relaxed));
 }
 
@@ -116,6 +118,12 @@ TEST(BatchSpanProcessorRingOs, SmokeOneProducerForceFlushAndShutdown)
 TEST(BatchSpanProcessorRingOs, SmokeThirtyTwoProducersForceFlushAndShutdown)
 {
   RunRingOsBatchSpanProcessorSmoke(32);
+}
+
+TEST(BatchSpanProcessorRingOs, SmokePartialTailWithoutTimer)
+{
+  RunRingOsBatchSpanProcessorSmoke(1, 1, 64);
+  RunRingOsBatchSpanProcessorSmoke(1, 65, 64);
 }
 
 }  // namespace

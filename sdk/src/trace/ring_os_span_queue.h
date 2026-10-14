@@ -7,9 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
-#include <condition_variable>
-#include <thread>
 #include <vector>
 
 #include "omnistack/mpsc/queue.h"
@@ -35,7 +32,6 @@ class RingOsSpanQueue final : public BatchSpanProcessorQueue
 {
 public:
   RingOsSpanQueue(size_t requested_capacity, size_t producer_count, uint32_t batch_size = 64);
-  ~RingOsSpanQueue() override;
   size_t TryEnqueueBatch(std::unique_ptr<Recordable> *records, size_t count) noexcept override;
 
   bool TryEnqueue(std::unique_ptr<Recordable> &recordable) noexcept override;
@@ -53,13 +49,9 @@ private:
   // Handles are destroyed before queue_, which owns their shared state.
   omnistack::mpsc::Queue queue_;
   std::vector<omnistack::mpsc::Producer> producers_;
-  std::unique_ptr<std::mutex[]> producer_mutexes_;
-  std::mutex timer_mutex_;
-  std::condition_variable timer_cv_;
-  bool timer_stop_ = false;
-  std::thread timer_;
   omnistack::mpsc::Consumer consumer_;
   const uint64_t instance_id_;
+  const bool needs_flush_;
   std::atomic<size_t> next_producer_slot_{0};
   std::atomic<size_t> queued_{0};
   std::atomic<uint64_t> accepted_{0};
