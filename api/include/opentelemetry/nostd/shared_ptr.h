@@ -80,8 +80,37 @@ private:
     std::shared_ptr<T> ptr_;
   };
 
+  // Non-owning wrapper for process-lifetime singleton objects. Copies and
+  // destruction deliberately avoid touching a shared reference count.
+  class borrowed_ptr_wrapper final : public shared_ptr_wrapper
+  {
+  public:
+    explicit borrowed_ptr_wrapper(pointer ptr) noexcept : ptr_{ptr} {}
+
+    void CopyTo(PlacementBuffer &buffer) const noexcept override
+    {
+      new (buffer.data) borrowed_ptr_wrapper{ptr_};
+    }
+
+    void MoveTo(PlacementBuffer &buffer) noexcept override
+    {
+      new (buffer.data) borrowed_ptr_wrapper{ptr_};
+      ptr_ = nullptr;
+    }
+
+    pointer Get() const noexcept override { return ptr_; }
+
+    void Reset() noexcept override { ptr_ = nullptr; }
+
+  private:
+    pointer ptr_;
+  };
+
   static_assert(sizeof(shared_ptr_wrapper) <= kMaxSize, "Placement buffer is too small");
   static_assert(alignof(shared_ptr_wrapper) <= kAlignment, "Placement buffer not properly aligned");
+  static_assert(sizeof(borrowed_ptr_wrapper) <= kMaxSize, "Placement buffer is too small");
+  static_assert(alignof(borrowed_ptr_wrapper) <= kAlignment,
+                "Placement buffer not properly aligned");
 
 public:
   shared_ptr() noexcept { new (buffer_.data) shared_ptr_wrapper{}; }
@@ -95,6 +124,14 @@ public:
   shared_ptr(std::shared_ptr<T> ptr) noexcept
   {
     new (buffer_.data) shared_ptr_wrapper{std::move(ptr)};
+  }
+
+  static shared_ptr Borrowed(pointer ptr) noexcept
+  {
+    shared_ptr result;
+    result.wrapper().~shared_ptr_wrapper();
+    new (result.buffer_.data) borrowed_ptr_wrapper{ptr};
+    return result;
   }
 
   shared_ptr(shared_ptr &&other) noexcept { other.wrapper().MoveTo(buffer_); }

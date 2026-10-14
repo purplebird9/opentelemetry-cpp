@@ -116,6 +116,28 @@ TEST(SharedPtrTest, Destruction)
   EXPECT_TRUE(was_destructed);
 }
 
+TEST(SharedPtrTest, BorrowedCopyMoveAndDestruction)
+{
+  bool was_destructed{};
+  {
+    A value{was_destructed};
+    {
+      auto borrowed = shared_ptr<A>::Borrowed(&value);
+      auto copy     = borrowed;
+      auto moved    = std::move(copy);
+
+      EXPECT_EQ(borrowed.get(), &value);
+      EXPECT_EQ(copy.get(), nullptr);  // NOLINT
+      EXPECT_EQ(moved.get(), &value);
+
+      moved = nullptr;
+      EXPECT_EQ(moved.get(), nullptr);
+    }
+    EXPECT_FALSE(was_destructed);
+  }
+  EXPECT_TRUE(was_destructed);
+}
+
 TEST(SharedPtrTest, Assignment)
 {
   auto value = new int{123};

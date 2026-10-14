@@ -42,8 +42,11 @@ public:
 
   OPENTELEMETRY_API_SINGLETON static nostd::shared_ptr<TraceState> GetDefault()
   {
-    static nostd::shared_ptr<TraceState> ts{new TraceState()};
-    return ts;
+    // The default empty TraceState lives for the process lifetime. Returning a
+    // borrowed pointer avoids a global shared_ptr refcount update for every
+    // recorded span while preserving ownership for non-default TraceState.
+    static TraceState ts;
+    return nostd::shared_ptr<TraceState>::Borrowed(&ts);
   }
 
   /**
