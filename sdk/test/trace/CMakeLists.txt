@@ -44,6 +44,26 @@ if(OPENTELEMETRY_WITH_RINGOS)
     TARGET batch_span_processor_ring_os_test
     TEST_PREFIX trace.
     TEST_LIST batch_span_processor_ring_os_test)
+
+  set(RINGOS_LOADGEN_SOURCE "" CACHE FILEPATH
+      "External source file for the RingOS BatchSpanProcessor load generator")
+  if(RINGOS_LOADGEN_SOURCE)
+    add_executable(otel_ringos_loadgen ${RINGOS_LOADGEN_SOURCE})
+    target_compile_features(otel_ringos_loadgen PRIVATE cxx_std_17)
+    target_include_directories(otel_ringos_loadgen PRIVATE
+                               ${OMNISTACK_MPSC_INCLUDE_DIR})
+    target_compile_definitions(
+      otel_ringos_loadgen PRIVATE
+      OSCHANNEL_GIT_COMMIT="${OSCHANNEL_GIT_COMMIT}"
+      OPENTELEMETRY_GIT_COMMIT="${OPENTELEMETRY_GIT_COMMIT}")
+    target_link_libraries(
+      otel_ringos_loadgen
+      ${CMAKE_THREAD_LIBS_INIT}
+      opentelemetry_common
+      opentelemetry_trace
+      opentelemetry_resources
+      ${OMNISTACK_MPSC_LIBRARY})
+  endif()
 endif()
 
 if(WITH_BENCHMARK)
